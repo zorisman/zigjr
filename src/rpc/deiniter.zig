@@ -70,7 +70,7 @@ pub fn Owned(T: type) type {
             };
         }
 
-        pub fn deinit(self: *@This()) void {
+        pub fn deinit(self: *const @This()) void {
             if (self.memory) |mem_ptr| self.alloc.free(mem_ptr);
         }
     };
