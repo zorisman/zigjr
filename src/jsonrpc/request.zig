@@ -62,7 +62,7 @@ pub const RpcRequestResult = struct {
     _parsed:        ?std.json.Parsed(RpcRequestMessage) = null,
     _request_json:  Owned([]const u8) = .{},
 
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(self: *const Self) void {
         if (self._parsed) |parsed| parsed.deinit();
         self._request_json.deinit();
     }

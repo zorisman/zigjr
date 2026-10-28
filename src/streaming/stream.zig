@@ -100,9 +100,7 @@ pub fn responsesByDelimiter(alloc: Allocator, reader: *std.Io.Reader,
 
         options.logger.log("stream.responsesByDelimiter", "receive response", response_json);
         const run_status = pipeline.runResponse(response_json, null) catch |err| {
-            var stderr_writer = std.fs.File.stderr().writer(&.{});
-            const stderr = &stderr_writer.interface;
-            stderr.print("Error in runResponse(). {any}", .{err}) catch {};
+            std.debug.print("Error in runResponse(). {any}\n", .{err});
             continue;
         };
         if (run_status.end_stream) {
@@ -198,9 +196,7 @@ pub fn responsesByContentLength(alloc: Allocator, reader: anytype,
 
         options.logger.log("stream.responsesByContentLength", "receive response", response_json);
         pipeline.runResponse(response_json, null) catch |err| {
-            var stderr_writer = std.fs.File.stderr().writer(&.{});
-            const stderr = &stderr_writer.interface;
-            stderr.print("Error in runResponse(). {any}", .{err}) catch {};
+            std.debug.print("Error in runResponse(). {any}\n", .{err});
         };
     }
 }

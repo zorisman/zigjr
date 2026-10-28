@@ -101,63 +101,81 @@ pub const DbgLogger = struct {
 
 
 /// A logger that logs to file, implemented the Logger interface.
+///
+/// The logger owns the opened file and appends each formatted line at the
+/// current end of the file. It uses a single-threaded `std.Io.Threaded`
+/// instance internally so callers do not have to supply a `std.Io`.
 pub const FileLogger = struct {
     alloc: Allocator,
+    io_impl: std.Io.Threaded = .init_single_threaded,
     count: usize = 0,
-    file: std.fs.File,
-    fwriter: std.fs.File.Writer,
-    write_buf: []const u8,
+    file: std.Io.File,
+    position: u64,
 
-    /// Create a FileLogger to log to the file at 'file_path',
+    /// Create a FileLogger to log to the file at 'file_path'.
+    /// An existing file is opened without truncation and appended to.
     pub fn init(alloc: Allocator, file_path: []const u8) !FileLogger {
-        const file = try fileOpenIf(file_path);
-        try file.seekFromEnd(0);                        // seek to end for appending to file.
-        const write_buf = try alloc.alloc(u8, 4096);    // buffer with the usual disk page size.
-        return .{
+        var self: FileLogger = .{
             .alloc = alloc,
-            .file = file,
-            .fwriter = file.writer(write_buf),
-            .write_buf = write_buf,
+            .file = undefined,
+            .position = 0,
         };
+        const io = self.io_impl.io();
+        self.file = try std.Io.Dir.cwd().createFile(io, file_path, .{ .truncate = false });
+        errdefer self.file.close(io);
+        self.position = try self.file.length(io);
+        return self;
     }
 
     pub fn deinit(self: *FileLogger) void {
-        self.file.close();
-        self.alloc.free(self.write_buf);
+        self.file.close(self.io_impl.io());
     }
 
     pub fn start(self: *FileLogger, message: []const u8) void {
         const ts_sec = std.time.timestamp();
-        self.fwriter.interface.print("Timestamp {d} - {s}\n", .{ts_sec, message})
-            catch |err| std.debug.print("Error while printing in start(). {any}\n", .{err});
-        self.fwriter.interface.flush() 
-            catch |err| std.debug.print("Error while flushing in log(). {any}\n", .{err});
+        self.writeFormatted("Timestamp {d} - {s}\n", .{ts_sec, message});
     }
 
     pub fn log(self: *FileLogger, source: []const u8, operation: []const u8, message: []const u8) void {
         self.count += 1;
-        self.fwriter.interface.print("{}: [{s}] {s} - {s}\n", .{self.count, source, operation, message})
-            catch |err| std.debug.print("Error while printing in log(). {any}\n", .{err});
-        self.fwriter.interface.flush() 
-            catch |err| std.debug.print("Error while flushing in log(). {any}\n", .{err});
+        self.writeFormatted("{}: [{s}] {s} - {s}\n", .{self.count, source, operation, message});
     }
     
     pub fn stop(self: *FileLogger, message: []const u8) void {
         const ts_sec = std.time.timestamp();
-        self.fwriter.interface.print("Timestamp {d} - {s}\n\n", .{ts_sec, message})
-            catch |err| std.debug.print("Error while printing in stop(). {any}\n", .{err});
-        self.fwriter.interface.flush()
-            catch |err| std.debug.print("Error while flushing in stop(). {any}\n", .{err});
+        self.writeFormatted("Timestamp {d} - {s}\n\n", .{ts_sec, message});
     }
 
-    fn fileOpenIf(file_path: []const u8) !std.fs.File {
-        return std.fs.cwd().openFile(file_path, .{ .mode = .write_only }) catch |err| {
-            if (err == error.FileNotFound) {
-                return try std.fs.cwd().createFile(file_path, .{ .read = false });
-            } else {
-                return err;
-            }
+    /// Formats one line and appends it at `position`. Formatting and write
+    /// failures are reported to stderr because the Logger interface is void.
+    fn writeFormatted(self: *FileLogger, comptime fmt: []const u8, args: anytype) void {
+        const line = std.fmt.allocPrint(self.alloc, fmt, args) catch |err| {
+            std.debug.print("Error while formatting a log line. {any}\n", .{err});
+            return;
         };
+        defer self.alloc.free(line);
+        self.writeAll(line);
+    }
+
+    /// Writes all of `data` at the current position, advancing it only by
+    /// the bytes actually written. A zero-progress write is treated as an
+    /// error rather than retried forever.
+    fn writeAll(self: *FileLogger, data: []const u8) void {
+        const io = self.io_impl.io();
+        var sent: usize = 0;
+        while (sent < data.len) {
+            const offset = self.position + @as(u64, @intCast(sent));
+            const written = self.file.writePositional(io, &.{data[sent..]}, offset) catch |err| {
+                std.debug.print("Error while writing a log line. {any}\n", .{err});
+                return;
+            };
+            if (written == 0) {
+                std.debug.print("Error while writing a log line: no progress.\n", .{});
+                return;
+            }
+            sent += written;
+        }
+        self.position += @as(u64, @intCast(sent));
     }
 
     /// Return a Logger interface for this FileLogger.
